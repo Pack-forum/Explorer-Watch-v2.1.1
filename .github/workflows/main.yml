@@ -1,5 +1,5 @@
 
-name: ExplorerWatch Windows CE ARM Build
+name: ExplorerWatch CE ARM Build
 
 on:
   workflow_dispatch:
@@ -14,47 +14,89 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find source
+      - name: Locate source
         shell: bash
         run: |
           set -eu
-          echo "Repository files:"
-          find . -maxdepth 4 -type f
-          SOURCE=$(find . -type f -iname 'main.cpp' | head -n 1)
-          test -n "$SOURCE"
+          SOURCE=$(find . -type f -iname main.cpp | head -n 1)
+          if [ -z "$SOURCE" ]; then
+            echo "main.cpp not found"
+            exit 1
+          fi
           echo "SOURCE=$SOURCE" >> "$GITHUB_ENV"
+          echo "Using: $SOURCE"
 
-      - name: Patch Windows CE compatibility
+      - name: Create CE compatibility header
+        shell: bash
+        run: |
+          cat > ce_compat.h <<'EOF'
+          #include <windows.h>
+
+          #ifdef CreateFontW
+          #undef CreateFontW
+          #endif
+
+          static HFONT WINAPI CE_CreateFontW(
+              int h, int w, int escapement, int orientation,
+              int weight, DWORD italic, DWORD underline,
+              DWORD strikeout, DWORD charset,
+              DWORD outPrecision, DWORD clipPrecision,
+              DWORD quality, DWORD pitchAndFamily,
+              LPCWSTR face
+          ) {
+              LOGFONTW lf = {0};
+
+              lf.lfHeight = h;
+              lf.lfWidth = w;
+              lf.lfEscapement = escapement;
+              lf.lfOrientation = orientation;
+              lf.lfWeight = weight;
+              lf.lfItalic = (BYTE)italic;
+              lf.lfUnderline = (BYTE)underline;
+              lf.lfStrikeOut = (BYTE)strikeout;
+              lf.lfCharSet = (BYTE)charset;
+              lf.lfOutPrecision = (BYTE)outPrecision;
+              lf.lfClipPrecision = (BYTE)clipPrecision;
+              lf.lfQuality = (BYTE)quality;
+              lf.lfPitchAndFamily = (BYTE)pitchAndFamily;
+
+              if (face)
+                  lstrcpynW(lf.lfFaceName, face, LF_FACESIZE);
+
+              return CreateFontIndirect(&lf);
+          }
+
+          #define CreateFontW CE_CreateFontW
+          EOF
+
+      - name: Patch CE source
         shell: bash
         run: |
           set -eu
+
           sed -i 's/,[[:space:]]*&p)/, p)/g' "$SOURCE"
           sed -i '/SetStretchBltMode[[:space:]]*(/d' "$SOURCE"
-          sed -i '/return CreateFontW(/c\  LOGFONT lf = {0};\
-          lf.lfHeight = -h;\
-          lf.lfWeight = w;\
-          lf.lfCharSet = DEFAULT_CHARSET;\
-          lstrcpy(lf.lfFaceName, TEXT("Tahoma"));\
-          return CreateFontIndirect(&lf);' "$SOURCE"
 
-      - name: Compile Windows CE EXE
+      - name: Compile ARM EXE
         shell: bash
         run: |
           set -eu
+
           arm-mingw32ce-g++ \
             -Os -s \
             -DUNICODE -D_UNICODE \
             -D_WIN32_WCE=0x500 \
+            -include "$PWD/ce_compat.h" \
             "$SOURCE" \
-            -o ExplorerWatcher-New.exe \
+            -o ExplorerWatch.exe \
             -lcoredll
 
-          test -s ExplorerWatcher-New.exe
-          ls -lh ExplorerWatcher-New.exe
+          test -s ExplorerWatch.exe
+          ls -lh ExplorerWatch.exe
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: ExplorerWatcher-New-WindowsCE-ARM
-          path: ExplorerWatcher-New.exe
+          name: ExplorerWatch-CE-ARM
+          path: ExplorerWatch.exe
           if-no-files-found: error
