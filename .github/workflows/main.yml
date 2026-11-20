@@ -1,0 +1,60 @@
+
+name: ExplorerWatch Windows CE ARM Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/enlyze/windows-ce-build-environment-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find source
+        shell: bash
+        run: |
+          set -eu
+          echo "Repository files:"
+          find . -maxdepth 4 -type f
+          SOURCE=$(find . -type f -iname 'main.cpp' | head -n 1)
+          test -n "$SOURCE"
+          echo "SOURCE=$SOURCE" >> "$GITHUB_ENV"
+
+      - name: Patch Windows CE compatibility
+        shell: bash
+        run: |
+          set -eu
+          sed -i 's/,[[:space:]]*&p)/, p)/g' "$SOURCE"
+          sed -i '/SetStretchBltMode[[:space:]]*(/d' "$SOURCE"
+          sed -i '/return CreateFontW(/c\  LOGFONT lf = {0};\
+          lf.lfHeight = -h;\
+          lf.lfWeight = w;\
+          lf.lfCharSet = DEFAULT_CHARSET;\
+          lstrcpy(lf.lfFaceName, TEXT("Tahoma"));\
+          return CreateFontIndirect(&lf);' "$SOURCE"
+
+      - name: Compile Windows CE EXE
+        shell: bash
+        run: |
+          set -eu
+          arm-mingw32ce-g++ \
+            -Os -s \
+            -DUNICODE -D_UNICODE \
+            -D_WIN32_WCE=0x500 \
+            "$SOURCE" \
+            -o ExplorerWatcher-New.exe \
+            -lcoredll
+
+          test -s ExplorerWatcher-New.exe
+          ls -lh ExplorerWatcher-New.exe
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExplorerWatcher-New-WindowsCE-ARM
+          path: ExplorerWatcher-New.exe
+          if-no-files-found: error
